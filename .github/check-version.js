@@ -1,5 +1,6 @@
 const packageJson = require('../icalingua/package.json')
 const fs = require('fs')
+const { execFileSync } = require('child_process')
 const core = require('@actions/core')
 
 Date.prototype.format = function (fmt) {
@@ -13,17 +14,11 @@ Date.prototype.format = function (fmt) {
         S: this.getMilliseconds(), //毫秒
     }
     if (/(y+)/.test(fmt)) {
-        fmt = fmt.replace(
-            RegExp.$1,
-            (this.getFullYear() + '').substr(4 - RegExp.$1.length),
-        )
+        fmt = fmt.replace(RegExp.$1, (this.getFullYear() + '').substr(4 - RegExp.$1.length))
     }
     for (var k in o) {
         if (new RegExp('(' + k + ')').test(fmt)) {
-            fmt = fmt.replace(
-                RegExp.$1,
-                RegExp.$1.length === 1 ? o[k] : ('00' + o[k]).substr(('' + o[k]).length),
-            )
+            fmt = fmt.replace(RegExp.$1, RegExp.$1.length === 1 ? o[k] : ('00' + o[k]).substr(('' + o[k]).length))
         }
     }
     return fmt
@@ -33,8 +28,26 @@ const now = new Date()
 const commitId = process.env.SHA.substr(0, 7)
 const ref = process.env.REF
 const isProduction = ref.startsWith('refs/tags/v')
-const buildTime = now.toLocaleString(undefined, {timeZone: 'Asia/Shanghai'})
-const version = process.env.GIT_VER
+const buildTime = now.toLocaleString(undefined, { timeZone: 'Asia/Shanghai' })
+let version = process.env.GIT_VER?.trim()
+if (!version) {
+    try {
+        version = execFileSync('git', ['describe', '--tags'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+        })
+            .trim()
+            .replace(/^v/, '')
+    } catch {
+        // Forks may have no tags. Keep the version declared by the application.
+        version = packageJson.version
+        core.warning(`Could not describe Git tags; using package.json version: ${version}`)
+    }
+}
+if (typeof version !== 'string' || !version.trim()) {
+    throw new Error('No version available from Git tags or icalingua/package.json')
+}
+version = version.trim()
 
 packageJson.version = version
 
@@ -44,11 +57,14 @@ isProduction: ${isProduction}
 buildTime: ${buildTime}
 version: ${version}`)
 
+core.setOutput('version', version)
 core.setOutput('arch-version', version.replace(/-/g, '_'))
 core.setOutput('pkg-name', `icalingua${isProduction ? '' : '-beta'}`)
 
-fs.writeFileSync('icalingua/static/version.json',
-    JSON.stringify({commitId, ref, isProduction, buildTime, version}), 'utf-8')
+fs.writeFileSync(
+    'icalingua/static/version.json',
+    JSON.stringify({ commitId, ref, isProduction, buildTime, version }),
+    'utf-8',
+)
 
-fs.writeFileSync('icalingua/package.json',
-    JSON.stringify(packageJson), 'utf-8')
+fs.writeFileSync('icalingua/package.json', JSON.stringify(packageJson), 'utf-8')
